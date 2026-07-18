@@ -1,7 +1,7 @@
 # ==============================================================================================================
-# 👑 Imperial Ghost Commander V12.2 - Premium Edition (Response Tracker & QR Viewer) 👑
+# 👑 Imperial Ghost Commander V12.3 - Mobile Fingerprint & Proxy Edition 👑
 # ==============================================================================================================
-# لوحة التحكم الاحترافية - إدارة متكاملة عبر واجهات فائقة الأداء ونظام تتبع الاستجابة النهائي للمعاينة
+# لوحة التحكم الاحترافية - بصمة موبايل خالصة + بروكسي سكني عام/خاص + تأخير زمني بين المعاملات
 # ==============================================================================================================
 
 import sys
@@ -17,6 +17,7 @@ import traceback
 import webbrowser
 import html  # لإظهار محتوى الـ HTML بشكل خام داخل الرادار دون كسره
 from datetime import datetime
+import random
 
 try:
     from curl_cffi import requests
@@ -36,7 +37,7 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem, QHeaderView, QProgressBar, QTextEdit, QTabWidget, QFileDialog,
     QMessageBox, QFrame
 )
-from PyQt6.QtCore import QThread, pyqtSignal, Qt, QSize
+from PyQt6.QtCore import QThread, pyqtSignal, Qt, QSize, QTimer
 from PyQt6.QtGui import QFont, QColor, QIcon, QPalette, QTextCursor
 
 
@@ -126,6 +127,10 @@ class DatabaseManager:
                            INTEGER
                            DEFAULT
                            0,
+                           proxy
+                           TEXT
+                           DEFAULT
+                           '',
                            status
                            TEXT
                            DEFAULT
@@ -143,14 +148,14 @@ class DatabaseManager:
         conn.commit()
         conn.close()
 
-    def add(self, name, phone, day, img, tactic, sabotage):
+    def add(self, name, phone, day, img, tactic, sabotage, proxy=""):
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute('''
                        INSERT INTO transactions (name, phone, target_day, image_path, tactic_mode, sabotage_enabled,
-                                                 status)
-                       VALUES (?, ?, ?, ?, ?, ?, 'معلق')
-                       ''', (name, phone, day, img, tactic, int(sabotage)))
+                                                 proxy, status)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, 'معلق')
+                       ''', (name, phone, day, img, tactic, int(sabotage), proxy))
         last_id = cursor.lastrowid
         conn.commit()
         conn.close()
@@ -160,7 +165,7 @@ class DatabaseManager:
         conn = self.get_connection()
         cursor = conn.cursor()
         data = cursor.execute(
-            'SELECT id, name, phone, target_day, image_path, tactic_mode, sabotage_enabled, status, reference_id FROM transactions').fetchall()
+            'SELECT id, name, phone, target_day, image_path, tactic_mode, sabotage_enabled, proxy, status, reference_id FROM transactions').fetchall()
         conn.close()
         return data
 
@@ -195,7 +200,7 @@ class BookingWorker(QThread):
     log_signal = pyqtSignal(str, str)  # level, message
     finished_signal = pyqtSignal(int, int, str, str)  # row, tid, status, ref
 
-    def __init__(self, row, data):
+    def __init__(self, row, data, global_proxy="", per_transaction_proxy=""):
         super().__init__()
         self.row = row
         self.tid = data[0]
@@ -205,21 +210,49 @@ class BookingWorker(QThread):
         self.img = data[4]
         self.tactic = data[5]
         self.sabotage = bool(data[6])
-        self.status = data[7]
-        self.ref_id = data[8]
+        self.status = data[8]
+        self.ref_id = data[9]
+
+        # البروكسي: الخاص بالمعاملة له أولوية على العام
+        self.proxy = per_transaction_proxy if per_transaction_proxy else global_proxy
 
         self.session = None
         self.base = "https://dash.sultraffic.com"
 
     def setup_session(self):
-        self.session = requests.Session(impersonate="chrome120")
+        # بصمة موبايل خالصة - Safari iOS
+        self.session = requests.Session(impersonate="safari_ios15_5")
+
+        # User-Agent موبايل حقيقي (iPhone Safari)
+        mobile_user_agents = [
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5.1 Mobile/15E148 Safari/604.1",
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1.1 Mobile/15E148 Safari/604.1",
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 16_7_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.7.2 Mobile/15E148 Safari/604.1",
+        ]
+
         self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-            "Accept-Language": "ar,en-US;q=0.9,en;q=0.8",
-            "Host": "dash.sultraffic.com"
+            "User-Agent": random.choice(mobile_user_agents),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "ar-SA,ar;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Host": "dash.sultraffic.com",
+            "Connection": "keep-alive",
         })
         self.session.verify = False
+
+        # تفعيل البروكسي (سكني - يغير الـ IP مع كل طلب)
+        if self.proxy:
+            proxy_url = self.proxy.strip()
+            # إضافة بروتوكول إذا لم يكن موجوداً
+            if not proxy_url.startswith("http://") and not proxy_url.startswith("https://") and not proxy_url.startswith("socks"):
+                proxy_url = f"http://{proxy_url}"
+            self.session.proxies = {
+                "http": proxy_url,
+                "https": proxy_url
+            }
+            self.log_signal.emit("INFO", f"[{self.tid}] تم تفعيل البروكسي: {proxy_url[:50]}...")
 
     def perform_total_sabotage(self):
         self.log_signal.emit("WARNING", f"[{self.tid}] ☢️ تفعيل وضع التدمير الشامل والمتقدم...")
@@ -390,13 +423,14 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.db = DatabaseManager()
-        self.setWindowTitle("Imperial Ghost Commander V12.2 - Response Tracker & QR Viewer")
-        self.setMinimumSize(1350, 850)
+        self.setWindowTitle("Imperial Ghost Commander V12.3 - Mobile Fingerprint & Proxy Edition")
+        self.setMinimumSize(1400, 900)
 
         self.pending = []
         self.active = []
         self.done = 0
         self.max_threads = 5
+        self.delay_between_transactions = 0  # التأخير الزمني بين المعاملات (ثوانٍ)
 
         self._init_ui()
         self.load_data()
@@ -489,6 +523,10 @@ class MainWindow(QMainWindow):
         btn_browse.setObjectName("btn_browse")
         btn_browse.clicked.connect(self._browse_image)
 
+        # حقل بروكسي خاص بالمعاملة
+        self.inp_proxy_per_tx = QLineEdit()
+        self.inp_proxy_per_tx.setPlaceholderText("بروكسي خاص بهذه المعاملة (اختياري) مثال: http://user:pass@ip:port")
+
         self.chk_sabotage = QCheckBox(
             "☢️ تفعيل ميزة التدمير الكلي الفوري (إيقاف Application Pool التابع للسيرفر ومسح ملفات الموقع كاملاً)")
 
@@ -507,14 +545,39 @@ class MainWindow(QMainWindow):
         grid_input.addWidget(QLabel("ملف المرفق الصوري:"), 2, 0)
         grid_input.addWidget(self.inp_img, 2, 1, 1, 2)
         grid_input.addWidget(btn_browse, 2, 3)
-        grid_input.addWidget(self.chk_sabotage, 3, 0, 1, 4)
-        grid_input.addWidget(btn_add, 4, 0, 1, 4)
+        grid_input.addWidget(QLabel("بروكسي خاص بالمعاملة:"), 3, 0)
+        grid_input.addWidget(self.inp_proxy_per_tx, 3, 1, 1, 3)
+        grid_input.addWidget(self.chk_sabotage, 4, 0, 1, 4)
+        grid_input.addWidget(btn_add, 5, 0, 1, 4)
         layout_dash.addWidget(group_input)
 
-        self.table = QTableWidget(0, 9)
+        # مجموعة إعدادات البروكسي العام والتأخير الزمني
+        group_settings = QGroupBox(" ⚡ إعدادات البروكسي العام والتأخير الزمني")
+        grid_settings = QGridLayout(group_settings)
+        grid_settings.setSpacing(10)
+        grid_settings.setContentsMargins(15, 20, 15, 15)
+
+        self.inp_global_proxy = QLineEdit()
+        self.inp_global_proxy.setPlaceholderText("بروكسي سكني عام لجميع المعاملات (مثال: http://user:pass@ip:port) - يتغير IP مع كل طلب")
+
+        self.inp_delay = QLineEdit()
+        self.inp_delay.setPlaceholderText("0")
+        self.inp_delay.setText("0")
+
+        self.chk_sequential = QCheckBox("تفعيل الإرسال المتتابع (معاملة تلو الأخرى مع تأخير)")
+
+        grid_settings.addWidget(QLabel("البروكسي العام (سكني):"), 0, 0)
+        grid_settings.addWidget(self.inp_global_proxy, 0, 1, 1, 3)
+        grid_settings.addWidget(QLabel("التأخير بين المعاملات (ثوانٍ):"), 1, 0)
+        grid_settings.addWidget(self.inp_delay, 1, 1)
+        grid_settings.addWidget(self.chk_sequential, 1, 2, 1, 2)
+
+        layout_dash.addWidget(group_settings)
+
+        self.table = QTableWidget(0, 10)
         self.table.setHorizontalHeaderLabels(
             ["ID", "الاسم", "الهاتف", "اليوم الجدولي", "مسار المرفق", "التكتيك", "التدمير الشامل",
-             "حالة العملية اللحظية", "رقم مرجع الخادم"])
+             "البروكسي الخاص", "حالة العملية اللحظية", "رقم مرجع الخادم"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setAlternatingRowColors(True)
@@ -585,7 +648,7 @@ class MainWindow(QMainWindow):
         failed = 0
 
         for r in range(total):
-            item = self.table.item(r, 7)
+            item = self.table.item(r, 8)
             if item:
                 txt = item.text()
                 if "✅" in txt or "نجاح" in txt:
@@ -622,6 +685,7 @@ class MainWindow(QMainWindow):
         name = self.inp_name.text().strip()
         phone = self.inp_phone.text().strip()
         img = self.inp_img.text().strip()
+        proxy_per_tx = self.inp_proxy_per_tx.text().strip()
 
         if not name or not phone:
             QMessageBox.warning(self, "خطأ بالبيانات والمستندات",
@@ -632,12 +696,13 @@ class MainWindow(QMainWindow):
         tactic = self.inp_tactic.currentText()
         sabotage_enabled = self.chk_sabotage.isChecked()
 
-        tid = self.db.add(name, phone, day, img, tactic, sabotage_enabled)
+        tid = self.db.add(name, phone, day, img, tactic, sabotage_enabled, proxy_per_tx)
         self.load_data()
 
         self.inp_name.clear()
         self.inp_phone.clear()
         self.inp_img.clear()
+        self.inp_proxy_per_tx.clear()
         self.chk_sabotage.setChecked(False)
         self.log("SUCCESS", f"تم حقن الهدف العملياتي بنجاح: {name} | المعرف الدولي للعملية: {tid}")
 
@@ -649,6 +714,7 @@ class MainWindow(QMainWindow):
             r = self.table.rowCount()
             self.table.insertRow(r)
 
+            # الترتيب: id, name, phone, target_day, image_path, tactic_mode, sabotage_enabled, proxy, status, reference_id
             ui_mapping = [
                 str(row[0]),
                 str(row[1]),
@@ -657,8 +723,9 @@ class MainWindow(QMainWindow):
                 str(row[4]),
                 str(row[5]),
                 "⚠️ نشط ومميت" if row[6] else "❌ غير نشط",
-                str(row[7]),
-                str(row[8])
+                str(row[7]) if row[7] else "عام",
+                str(row[8]),
+                str(row[9])
             ]
 
             for col_idx, text_val in enumerate(ui_mapping):
@@ -668,6 +735,8 @@ class MainWindow(QMainWindow):
                 if col_idx == 6:
                     item.setForeground(QColor("#f85149") if row[6] else QColor("#8b949e"))
                 elif col_idx == 7:
+                    item.setForeground(QColor("#a5d6ff"))
+                elif col_idx == 8:
                     if "نجاح" in text_val or "✅" in text_val:
                         item.setForeground(QColor("#56d364"))
                     elif "فشل" in text_val or "❌" in text_val or "خطأ" in text_val:
@@ -683,8 +752,8 @@ class MainWindow(QMainWindow):
     def open_saved_response_page(self, item):
         row_idx = item.row()
         tid = self.table.item(row_idx, 0).text()
-        status_text = self.table.item(row_idx, 7).text()
-        ref_text = self.table.item(row_idx, 8).text()
+        status_text = self.table.item(row_idx, 8).text()
+        ref_text = self.table.item(row_idx, 9).text()
 
         if "نجاح" in status_text and ref_text:
             expected_file = f"Imperial_Server_Responses/Response_ID_{tid}_Ref_{ref_text}.html"
@@ -724,11 +793,26 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "مصفوفة فارغة", "لا توجد أهداف متاحة للبدء بالهجوم المجدول.")
             return
 
+        # قراءة إعدادات التأخير
+        try:
+            self.delay_between_transactions = float(self.inp_delay.text().strip())
+        except ValueError:
+            self.delay_between_transactions = 0
+
+        # التحقق من وضع الإرسال المتتابع
+        self.sequential_mode = self.chk_sequential.isChecked()
+
+        # إذا كان الوضع متتابع، نجعل max_threads = 1
+        if self.sequential_mode:
+            self.max_threads = 1
+        else:
+            self.max_threads = 5
+
         self.pending = []
         db_rows = self.db.get_all()
 
         for r in range(self.table.rowCount()):
-            status_item = self.table.item(r, 7)
+            status_item = self.table.item(r, 8)
             if status_item and "نجاح" not in status_item.text():
                 if r < len(db_rows):
                     self.pending.append((r, db_rows[r]))
@@ -744,13 +828,20 @@ class MainWindow(QMainWindow):
         self.active = []
 
         self.log("INFO", f"تم إطلاق صافرة بدء العمليات الحركية المكثفة على {len(self.pending)} هدف مجدول.")
+        if self.sequential_mode and self.delay_between_transactions > 0:
+            self.log("INFO", f"الوضع المتتابع: تأخير {self.delay_between_transactions} ثانية بين كل معاملة.")
         self._dispatch()
 
     def _dispatch(self):
         while len(self.active) < self.max_threads and self.pending:
             row, data = self.pending.pop(0)
 
-            worker = BookingWorker(row, data)
+            # البروكسي العام
+            global_proxy = self.inp_global_proxy.text().strip()
+            # البروكسي الخاص بالمعاملة (index 7 في data)
+            per_tx_proxy = data[7] if len(data) > 7 else ""
+
+            worker = BookingWorker(row, data, global_proxy=global_proxy, per_transaction_proxy=per_tx_proxy)
             worker.update_signal.connect(self._on_worker_update)
             worker.log_signal.connect(self.log)
             worker.finished_signal.connect(self._on_worker_finished)
@@ -768,8 +859,8 @@ class MainWindow(QMainWindow):
             else:
                 item_status.setForeground(QColor("#ffea7f"))
 
-            self.table.setItem(row, 7, item_status)
-            self.table.setItem(row, 8, item_ref)
+            self.table.setItem(row, 8, item_status)
+            self.table.setItem(row, 9, item_ref)
             self._update_stats_display()
 
     def _on_worker_finished(self, row, tid, status, ref):
@@ -782,9 +873,14 @@ class MainWindow(QMainWindow):
         self.load_data()
 
         if self.pending:
-            self._dispatch()
+            # تأخير بين المعاملات في الوضع المتتابع
+            if self.sequential_mode and self.delay_between_transactions > 0:
+                QTimer.singleShot(int(self.delay_between_transactions * 1000), self._dispatch)
+            else:
+                self._dispatch()
         elif not self.active:
             self.btn_start.setEnabled(True)
+            self.max_threads = 5  # إعادة القيمة الافتراضية
             self.log("SUCCESS", "انتهت كافة العمليات والتدفقات المجدولة بداخل لوحة التحكم بالكامل.")
             QMessageBox.information(self, "اكتمال المهام",
                                     "تم الانتهاء من حجز كافة الأهداف وسحب صفحات الردود الرسمية بنجاح.")
