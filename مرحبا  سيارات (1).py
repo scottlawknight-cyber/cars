@@ -225,25 +225,41 @@ class BookingWorker(QThread):
 
 
     def setup_session(self):
-        # بصمة موبايل خالصة - Safari iOS
-        self.session = requests.Session(impersonate="safari_ios15_5")
+        # بصمة موبايل خالصة - استخدام chrome99_android (مدعوم في جميع نسخ curl_cffi)
+        # إذا فشل، نجرب chrome120 كبديل
+        try:
+            self.session = requests.Session(impersonate="chrome99_android")
+        except Exception:
+            try:
+                self.session = requests.Session(impersonate="chrome110")
+            except Exception:
+                self.session = requests.Session(impersonate="chrome120")
 
-        # User-Agent موبايل حقيقي (iPhone Safari)
+        # User-Agent موبايل حقيقي (Android Chrome)
         mobile_user_agents = [
+            "Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.230 Mobile Safari/537.36",
+            "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.6167.101 Mobile Safari/537.36",
+            "Mozilla/5.0 (Linux; Android 13; SM-A546B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.144 Mobile Safari/537.36",
+            "Mozilla/5.0 (Linux; Android 14; SM-S911B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.64 Mobile Safari/537.36",
+            "Mozilla/5.0 (Linux; Android 13; Redmi Note 12 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.210 Mobile Safari/537.36",
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
             "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5.1 Mobile/15E148 Safari/604.1",
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1.1 Mobile/15E148 Safari/604.1",
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 16_7_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.7.2 Mobile/15E148 Safari/604.1",
         ]
 
         self.session.headers.update({
             "User-Agent": random.choice(mobile_user_agents),
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
             "Accept-Language": "ar-SA,ar;q=0.9,en-US;q=0.8,en;q=0.7",
             "Accept-Encoding": "gzip, deflate, br",
             "Host": "dash.sultraffic.com",
             "Connection": "keep-alive",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+            "Sec-CH-UA-Mobile": "?1",
+            "Sec-CH-UA-Platform": "\"Android\"",
+            "Upgrade-Insecure-Requests": "1",
         })
         self.session.verify = False
 
@@ -256,7 +272,7 @@ class BookingWorker(QThread):
                 "http": proxy_url,
                 "https": proxy_url
             }
-            self.log_signal.emit("INFO", f"[{self.tid}] تم تفعيل البروكسي: {proxy_url[:50]}...")
+            self.log_signal.emit("INFO", f"[{self.tid}] تم تفعيل البروكسي: {proxy_url}")
 
 
     def perform_total_sabotage(self):
@@ -611,6 +627,10 @@ class MainWindow(QMainWindow):
         self.btn_start.setObjectName("btn_start")
         self.btn_start.clicked.connect(self.start_attack)
 
+        self.btn_start_all = QPushButton("🔄 إرسال الكل مرة واحدة")
+        self.btn_start_all.setStyleSheet("background-color: #1f6feb; color: white; border: 1px solid #388bfd; font-size: 13px;")
+        self.btn_start_all.clicked.connect(self.start_attack_all)
+
         self.btn_edit = QPushButton("✏️ تعديل الهدف المحدد")
         self.btn_edit.setStyleSheet("background-color: #8957e5; color: white; border: 1px solid #a371f7;")
         self.btn_edit.clicked.connect(self.edit_target)
@@ -622,7 +642,8 @@ class MainWindow(QMainWindow):
         self.btn_wipe.setObjectName("btn_wipe")
         self.btn_wipe.clicked.connect(self.wipe_all)
 
-        layout_buttons.addWidget(self.btn_start, 3)
+        layout_buttons.addWidget(self.btn_start, 2)
+        layout_buttons.addWidget(self.btn_start_all, 2)
         layout_buttons.addWidget(self.btn_edit, 1)
         layout_buttons.addWidget(self.btn_delete, 1)
         layout_buttons.addWidget(self.btn_wipe, 1)
@@ -699,9 +720,11 @@ class MainWindow(QMainWindow):
 
         html_msg = f"<span style='color:#8b949e'>[{ts}]</span> <span style='color:{color}'><b>[{level}]</b> {msg}</span>"
         self.log_console.append(html_msg)
-        self.log_console.moveCursor(QTextCursor.MoveOperation.End)
+        # التمرير لأسفل لإظهار آخر رسالة دائماً
+        scrollbar = self.log_console.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
         imperial_logger.log(getattr(logging, level, logging.INFO),
-                            msg.replace("<br>", "\n").replace("</span>", "").replace("<span", ""))
+                            msg.replace("<br>", "\n").replace("</span>", "").replace("<span", "").replace("<div", "").replace("</div>", "").replace("<pre", "").replace("</pre>", "").replace("<b>", "").replace("</b>", ""))
 
     def add_or_update_target(self):
         """إضافة هدف جديد أو حفظ التعديلات"""
@@ -917,12 +940,58 @@ class MainWindow(QMainWindow):
             return
 
         self.btn_start.setEnabled(False)
+        self.btn_start_all.setEnabled(False)
         self.done = 0
         self.progress.setMaximum(len(self.pending))
         self.progress.setValue(0)
         self.active = []
 
         self.log("INFO", f"تم إطلاق صافرة بدء العمليات الحركية المكثفة على {len(self.pending)} هدف مجدول.")
+        if self.sequential_mode and self.delay_between_transactions > 0:
+            self.log("INFO", f"الوضع المتتابع: تأخير {self.delay_between_transactions} ثانية بين كل معاملة.")
+        self._dispatch()
+
+    def start_attack_all(self):
+        """إرسال جميع المعاملات مرة واحدة بغض النظر عن حالتها (حتى الناجحة سابقاً)"""
+        if self.table.rowCount() == 0:
+            QMessageBox.warning(self, "مصفوفة فارغة", "لا توجد أهداف متاحة للبدء.")
+            return
+
+        # قراءة إعدادات التأخير
+        try:
+            self.delay_between_transactions = float(self.inp_delay.text().strip())
+        except ValueError:
+            self.delay_between_transactions = 0
+
+        self.sequential_mode = self.chk_sequential.isChecked()
+
+        if self.sequential_mode:
+            self.max_threads = 1
+        else:
+            self.max_threads = 5
+
+        # إعادة تعيين حالة جميع المعاملات إلى 'معلق'
+        db_rows = self.db.get_all()
+        for row_data in db_rows:
+            self.db.update_status(row_data[0], "معلق", "")
+
+        self.load_data()
+
+        self.pending = []
+        db_rows = self.db.get_all()
+
+        for r in range(self.table.rowCount()):
+            if r < len(db_rows):
+                self.pending.append((r, db_rows[r]))
+
+        self.btn_start.setEnabled(False)
+        self.btn_start_all.setEnabled(False)
+        self.done = 0
+        self.progress.setMaximum(len(self.pending))
+        self.progress.setValue(0)
+        self.active = []
+
+        self.log("INFO", f"🔄 إرسال الكل مرة واحدة: {len(self.pending)} هدف (شامل الناجحة سابقاً).")
         if self.sequential_mode and self.delay_between_transactions > 0:
             self.log("INFO", f"الوضع المتتابع: تأخير {self.delay_between_transactions} ثانية بين كل معاملة.")
         self._dispatch()
@@ -976,6 +1045,7 @@ class MainWindow(QMainWindow):
                 self._dispatch()
         elif not self.active:
             self.btn_start.setEnabled(True)
+            self.btn_start_all.setEnabled(True)
             self.max_threads = 5
             self.log("SUCCESS", "انتهت كافة العمليات والتدفقات المجدولة بداخل لوحة التحكم بالكامل.")
             QMessageBox.information(self, "اكتمال المهام",
