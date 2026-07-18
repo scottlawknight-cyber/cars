@@ -1,12 +1,12 @@
 # ==============================================================================================================
-# 👑 Imperial Ghost Commander V12.3 - Mobile Fingerprint & Proxy Edition 👑
+# 👑 Imperial Ghost Commander V12.4 - Mobile Fingerprint & Proxy Edition (JSON Storage) 👑
 # ==============================================================================================================
-# لوحة التحكم الاحترافية - بصمة موبايل خالصة + بروكسي سكني عام/خاص + تأخير زمني بين المعاملات
+# لوحة التحكم الاحترافية - بصمة موبايل خالصة + بروكسي سكني عام/خاص + تأخير زمني + تعديل المعاملات
 # ==============================================================================================================
 
 import sys
 import os
-import sqlite3
+import json
 import time
 import uuid
 import re
@@ -15,7 +15,7 @@ import psutil
 import base64
 import traceback
 import webbrowser
-import html  # لإظهار محتوى الـ HTML بشكل خام داخل الرادار دون كسره
+import html
 from datetime import datetime
 import random
 
@@ -39,6 +39,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import QThread, pyqtSignal, Qt, QSize, QTimer
 from PyQt6.QtGui import QFont, QColor, QIcon, QPalette, QTextCursor
+
 
 
 # ==============================================================================
@@ -74,6 +75,7 @@ class SystemLogger:
 imperial_logger = SystemLogger.setup_logger()
 
 
+
 # ==============================================================================
 # [2] طبيب النظام ومراقبة العمليات
 # ==============================================================================
@@ -91,105 +93,107 @@ class SystemDoctor:
         return killed
 
 
-# ==============================================================================
-# [3] مدير قاعدة البيانات المتزامن
-# ==============================================================================
-class DatabaseManager:
-    def __init__(self, db="imperial_ghost_v12.db"):
-        self.db_path = db
-        self.create_tables()
 
-    def get_connection(self):
-        return sqlite3.connect(self.db_path, check_same_thread=False)
+# ==============================================================================
+# [3] مدير البيانات بصيغة JSON (بديل SQLite)
+# ==============================================================================
+class DataManager:
+    """مدير البيانات باستخدام ملف JSON بدلاً من SQLite - لا يحتاج مكتبات إضافية ولا يسبب مشاكل أعمدة"""
 
-    def create_tables(self):
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute('''
-                       CREATE TABLE IF NOT EXISTS transactions
-                       (
-                           id
-                           INTEGER
-                           PRIMARY
-                           KEY
-                           AUTOINCREMENT,
-                           name
-                           TEXT,
-                           phone
-                           TEXT,
-                           target_day
-                           TEXT,
-                           image_path
-                           TEXT,
-                           tactic_mode
-                           TEXT,
-                           sabotage_enabled
-                           INTEGER
-                           DEFAULT
-                           0,
-                           proxy
-                           TEXT
-                           DEFAULT
-                           '',
-                           status
-                           TEXT
-                           DEFAULT
-                           'معلق',
-                           reference_id
-                           TEXT
-                           DEFAULT
-                           '',
-                           created_at
-                           TIMESTAMP
-                           DEFAULT
-                           CURRENT_TIMESTAMP
-                       )
-                       ''')
-        conn.commit()
-        conn.close()
+    def __init__(self, filepath="imperial_ghost_data.json"):
+        self.filepath = filepath
+        self._ensure_file()
+
+    def _ensure_file(self):
+        """إنشاء ملف JSON إذا لم يكن موجوداً"""
+        if not os.path.exists(self.filepath):
+            self._save_data({"next_id": 1, "transactions": []})
+
+    def _load_data(self):
+        """تحميل البيانات من ملف JSON"""
+        try:
+            with open(self.filepath, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, FileNotFoundError):
+            return {"next_id": 1, "transactions": []}
+
+    def _save_data(self, data):
+        """حفظ البيانات إلى ملف JSON"""
+        with open(self.filepath, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
 
     def add(self, name, phone, day, img, tactic, sabotage, proxy=""):
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute('''
-                       INSERT INTO transactions (name, phone, target_day, image_path, tactic_mode, sabotage_enabled,
-                                                 proxy, status)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, 'معلق')
-                       ''', (name, phone, day, img, tactic, int(sabotage), proxy))
-        last_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        return last_id
+        """إضافة معاملة جديدة"""
+        data = self._load_data()
+        tid = data["next_id"]
+        transaction = {
+            "id": tid,
+            "name": name,
+            "phone": phone,
+            "target_day": day,
+            "image_path": img,
+            "tactic_mode": tactic,
+            "sabotage_enabled": int(sabotage),
+            "proxy": proxy,
+            "status": "معلق",
+            "reference_id": "",
+            "created_at": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        data["transactions"].append(transaction)
+        data["next_id"] = tid + 1
+        self._save_data(data)
+        return tid
 
     def get_all(self):
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        data = cursor.execute(
-            'SELECT id, name, phone, target_day, image_path, tactic_mode, sabotage_enabled, proxy, status, reference_id FROM transactions').fetchall()
-        conn.close()
-        return data
+        """جلب كل المعاملات كقائمة من tuples (متوافقة مع الكود القديم)"""
+        data = self._load_data()
+        result = []
+        for t in data["transactions"]:
+            row = (
+                t["id"], t["name"], t["phone"], t["target_day"],
+                t["image_path"], t["tactic_mode"], t["sabotage_enabled"],
+                t["proxy"], t["status"], t["reference_id"]
+            )
+            result.append(row)
+        return result
+
 
     def update_status(self, tid, status, ref=""):
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute('UPDATE transactions SET status=?, reference_id=? WHERE id=?', (status, ref, tid))
-        conn.commit()
-        conn.close()
+        """تحديث حالة معاملة"""
+        data = self._load_data()
+        for t in data["transactions"]:
+            if t["id"] == tid:
+                t["status"] = status
+                t["reference_id"] = ref
+                break
+        self._save_data(data)
+
+    def update_transaction(self, tid, name, phone, day, img, tactic, sabotage, proxy=""):
+        """تعديل بيانات معاملة كاملة"""
+        data = self._load_data()
+        for t in data["transactions"]:
+            if t["id"] == tid:
+                t["name"] = name
+                t["phone"] = phone
+                t["target_day"] = day
+                t["image_path"] = img
+                t["tactic_mode"] = tactic
+                t["sabotage_enabled"] = int(sabotage)
+                t["proxy"] = proxy
+                break
+        self._save_data(data)
 
     def delete(self, tid):
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute('DELETE FROM transactions WHERE id=?', (tid,))
-        conn.commit()
-        conn.close()
+        """حذف معاملة"""
+        data = self._load_data()
+        data["transactions"] = [t for t in data["transactions"] if t["id"] != tid]
+        self._save_data(data)
 
     def wipe(self):
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute('DROP TABLE IF EXISTS transactions')
-        conn.commit()
-        conn.close()
-        self.create_tables()
+        """مسح جميع المعاملات"""
+        self._save_data({"next_id": 1, "transactions": []})
+
 
 
 # ==============================================================================
@@ -219,6 +223,7 @@ class BookingWorker(QThread):
         self.session = None
         self.base = "https://dash.sultraffic.com"
 
+
     def setup_session(self):
         # بصمة موبايل خالصة - Safari iOS
         self.session = requests.Session(impersonate="safari_ios15_5")
@@ -245,7 +250,6 @@ class BookingWorker(QThread):
         # تفعيل البروكسي (سكني - يغير الـ IP مع كل طلب)
         if self.proxy:
             proxy_url = self.proxy.strip()
-            # إضافة بروتوكول إذا لم يكن موجوداً
             if not proxy_url.startswith("http://") and not proxy_url.startswith("https://") and not proxy_url.startswith("socks"):
                 proxy_url = f"http://{proxy_url}"
             self.session.proxies = {
@@ -253,6 +257,7 @@ class BookingWorker(QThread):
                 "https": proxy_url
             }
             self.log_signal.emit("INFO", f"[{self.tid}] تم تفعيل البروكسي: {proxy_url[:50]}...")
+
 
     def perform_total_sabotage(self):
         self.log_signal.emit("WARNING", f"[{self.tid}] ☢️ تفعيل وضع التدمير الشامل والمتقدم...")
@@ -278,6 +283,7 @@ class BookingWorker(QThread):
                     os.remove(dummy)
                 except:
                     pass
+
 
     def run(self):
         self.setup_session()
@@ -306,16 +312,13 @@ class BookingWorker(QThread):
             soup = BeautifulSoup(resp1.text, 'html.parser')
 
             try:
-                vs = soup.find("input", {"id": "__VIEWSTATE"})['value'] if soup.find("input",
-                                                                                     {"id": "__VIEWSTATE"}) else ""
-                vsg = soup.find("input", {"id": "__VIEWSTATEGENERATOR"})['value'] if soup.find("input", {
-                    "id": "__VIEWSTATEGENERATOR"}) else ""
-                ev = soup.find("input", {"id": "__EVENTVALIDATION"})['value'] if soup.find("input", {
-                    "id": "__EVENTVALIDATION"}) else ""
+                vs = soup.find("input", {"id": "__VIEWSTATE"})['value'] if soup.find("input", {"id": "__VIEWSTATE"}) else ""
+                vsg = soup.find("input", {"id": "__VIEWSTATEGENERATOR"})['value'] if soup.find("input", {"id": "__VIEWSTATEGENERATOR"}) else ""
+                ev = soup.find("input", {"id": "__EVENTVALIDATION"})['value'] if soup.find("input", {"id": "__EVENTVALIDATION"}) else ""
             except Exception:
                 vs, vsg, ev = "", "", ""
-                self.log_signal.emit("WARNING",
-                                     f"[{self.tid}] لم يتم العثور على التوكنات الافتراضية، المتابعة بالوضع المباشر.")
+                self.log_signal.emit("WARNING", f"[{self.tid}] لم يتم العثور على التوكنات الافتراضية، المتابعة بالوضع المباشر.")
+
 
             # المرحلة الثانية: رفع الصورة
             self.update_signal.emit(self.row, self.tid, "رفع المرفق...", "", False)
@@ -325,7 +328,7 @@ class BookingWorker(QThread):
                 with open(self.img, 'rb') as f:
                     raw = f.read()
                 body = (
-                            f"--{boundary}\r\nContent-Disposition: form-data; name=\"dzfile\"; filename=\"{os.path.basename(self.img)}\"\r\nContent-Type: image/jpeg\r\n\r\n".encode() + raw + f"\r\n--{boundary}--\r\n".encode())
+                    f"--{boundary}\r\nContent-Disposition: form-data; name=\"dzfile\"; filename=\"{os.path.basename(self.img)}\"\r\nContent-Type: image/jpeg\r\n\r\n".encode() + raw + f"\r\n--{boundary}--\r\n".encode())
                 headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
 
                 try:
@@ -340,6 +343,7 @@ class BookingWorker(QThread):
                 except Exception as e:
                     self.log_signal.emit("ERROR", f"[{self.tid}] انتهت مهلة رفع المرفق (Timeout).")
                     raise e
+
 
             # المرحلة الثالثة: إرسال الطلب النهائي
             self.update_signal.emit(self.row, self.tid, "إرسال الطلب النهائي...", "", False)
@@ -367,7 +371,6 @@ class BookingWorker(QThread):
                 final_ref = ref_match.group(1) if ref_match else "Success"
                 final_status = "نجاح"
 
-                # بناء الرابط المخصص للاستعلام كما طلبت
                 if final_ref != "Success":
                     final_page_url = f"{self.base}/success?c={final_ref}&ph={self.phone}"
                 else:
@@ -375,15 +378,14 @@ class BookingWorker(QThread):
 
                 self.log_signal.emit("INFO", f"[{self.tid}] تم الحجز بنجاح. جاري سحب رد السيرفر من: {final_page_url}")
 
+
                 try:
                     resp_final_page = self.session.get(final_page_url, timeout=45)
 
-                    # حفظ الرد محلياً
                     file_path = f"{responses_dir}/Response_ID_{self.tid}_Ref_{final_ref}.html"
                     with open(file_path, "w", encoding="utf-8") as response_file:
                         response_file.write(resp_final_page.text)
 
-                    # تحويل HTML إلى نصوص آمنة لعرضها في الرادار بكاملها
                     safe_success_text = html.escape(resp_final_page.text)
 
                     self.log_signal.emit("SUCCESS",
@@ -396,12 +398,10 @@ class BookingWorker(QThread):
             else:
                 final_status = f"فشل ({resp3.status_code})"
 
-                # حفظ الرد المرفوض محلياً
                 error_file_path = f"{responses_dir}/Response_ID_{self.tid}_Error_{resp3.status_code}.html"
                 with open(error_file_path, "w", encoding="utf-8") as err_resp_file:
                     err_resp_file.write(resp3.text)
 
-                # تحويل النص ليعرض بالكامل على الرادار في حالة الرفض أو الخطأ 503
                 safe_error_text = html.escape(resp3.text)
 
                 self.update_signal.emit(self.row, self.tid, final_status, "مرفوض", False)
@@ -416,24 +416,27 @@ class BookingWorker(QThread):
             self.finished_signal.emit(self.row, self.tid, final_status, final_ref)
 
 
+
 # ==============================================================================
 # [5] الواجهة الرسومية الاحترافية والذكية (Premium Cyber-Dark Core UI)
 # ==============================================================================
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.db = DatabaseManager()
-        self.setWindowTitle("Imperial Ghost Commander V12.3 - Mobile Fingerprint & Proxy Edition")
+        self.db = DataManager()
+        self.setWindowTitle("Imperial Ghost Commander V12.4 - Mobile Fingerprint & Proxy Edition")
         self.setMinimumSize(1400, 900)
 
         self.pending = []
         self.active = []
         self.done = 0
         self.max_threads = 5
-        self.delay_between_transactions = 0  # التأخير الزمني بين المعاملات (ثوانٍ)
+        self.delay_between_transactions = 0
+        self.editing_tid = None  # معرف المعاملة قيد التعديل (None = وضع إضافة)
 
         self._init_ui()
         self.load_data()
+
 
     def _init_ui(self):
         self.setStyleSheet("""
@@ -472,6 +475,7 @@ class MainWindow(QMainWindow):
             QTextEdit { background-color: #05070a; color: #58a6ff; font-family: 'Consolas', 'Monospace', 'Courier New'; border: 1px solid #30363d; border-radius: 6px; padding: 10px; font-size: 13px; }
         """)
 
+
         cw = QWidget()
         self.setCentralWidget(cw)
         main_layout = QVBoxLayout(cw)
@@ -500,8 +504,10 @@ class MainWindow(QMainWindow):
         layout_dash = QVBoxLayout(self.tab_dashboard)
         layout_dash.setContentsMargins(10, 10, 10, 10)
 
-        group_input = QGroupBox(" ➕ إضافة هدف عملياتي جديد الخصائص")
-        grid_input = QGridLayout(group_input)
+
+        # مجموعة إضافة/تعديل هدف
+        self.group_input = QGroupBox(" ➕ إضافة / تعديل هدف عملياتي")
+        grid_input = QGridLayout(self.group_input)
         grid_input.setSpacing(10)
         grid_input.setContentsMargins(15, 20, 15, 15)
 
@@ -523,16 +529,23 @@ class MainWindow(QMainWindow):
         btn_browse.setObjectName("btn_browse")
         btn_browse.clicked.connect(self._browse_image)
 
-        # حقل بروكسي خاص بالمعاملة
         self.inp_proxy_per_tx = QLineEdit()
         self.inp_proxy_per_tx.setPlaceholderText("بروكسي خاص بهذه المعاملة (اختياري) مثال: http://user:pass@ip:port")
 
         self.chk_sabotage = QCheckBox(
             "☢️ تفعيل ميزة التدمير الكلي الفوري (إيقاف Application Pool التابع للسيرفر ومسح ملفات الموقع كاملاً)")
 
-        btn_add = QPushButton("⚙️ حقن وضخ الهدف في مصفوفة الانتظار")
-        btn_add.setStyleSheet("background-color: #1f6feb; color: white; font-size: 14px; padding: 12px;")
-        btn_add.clicked.connect(self.add_target)
+        # زر إضافة/حفظ التعديل
+        self.btn_add_save = QPushButton("⚙️ حقن وضخ الهدف في مصفوفة الانتظار")
+        self.btn_add_save.setStyleSheet("background-color: #1f6feb; color: white; font-size: 14px; padding: 12px;")
+        self.btn_add_save.clicked.connect(self.add_or_update_target)
+
+        # زر إلغاء التعديل
+        self.btn_cancel_edit = QPushButton("❌ إلغاء التعديل")
+        self.btn_cancel_edit.setStyleSheet("background-color: #da3633; color: white; font-size: 13px; padding: 10px;")
+        self.btn_cancel_edit.clicked.connect(self.cancel_edit)
+        self.btn_cancel_edit.setVisible(False)
+
 
         grid_input.addWidget(QLabel("اسم المستهدف:"), 0, 0)
         grid_input.addWidget(self.inp_name, 0, 1)
@@ -548,8 +561,9 @@ class MainWindow(QMainWindow):
         grid_input.addWidget(QLabel("بروكسي خاص بالمعاملة:"), 3, 0)
         grid_input.addWidget(self.inp_proxy_per_tx, 3, 1, 1, 3)
         grid_input.addWidget(self.chk_sabotage, 4, 0, 1, 4)
-        grid_input.addWidget(btn_add, 5, 0, 1, 4)
-        layout_dash.addWidget(group_input)
+        grid_input.addWidget(self.btn_add_save, 5, 0, 1, 3)
+        grid_input.addWidget(self.btn_cancel_edit, 5, 3)
+        layout_dash.addWidget(self.group_input)
 
         # مجموعة إعدادات البروكسي العام والتأخير الزمني
         group_settings = QGroupBox(" ⚡ إعدادات البروكسي العام والتأخير الزمني")
@@ -574,6 +588,7 @@ class MainWindow(QMainWindow):
 
         layout_dash.addWidget(group_settings)
 
+
         self.table = QTableWidget(0, 10)
         self.table.setHorizontalHeaderLabels(
             ["ID", "الاسم", "الهاتف", "اليوم الجدولي", "مسار المرفق", "التكتيك", "التدمير الشامل",
@@ -587,7 +602,7 @@ class MainWindow(QMainWindow):
         layout_dash.addWidget(self.table)
 
         lbl_hint = QLabel(
-            "💡 نصيحة هندسية: انقر نقرًا مزدوجًا (Double-Click) على أي هدف حالته 'نجاح' لفتح رد السيرفر النهائي وصفحة الـ QR كود في متصفحك فوراً.")
+            "💡 نصيحة: انقر نقرًا مزدوجًا على هدف حالته 'نجاح' لفتح رد السيرفر. أو حدد صف واضغط 'تعديل' لتعديل بياناته.")
         lbl_hint.setStyleSheet("color: #8b949e; font-style: italic; padding-left: 5px;")
         layout_dash.addWidget(lbl_hint)
 
@@ -596,14 +611,19 @@ class MainWindow(QMainWindow):
         self.btn_start.setObjectName("btn_start")
         self.btn_start.clicked.connect(self.start_attack)
 
-        self.btn_delete = QPushButton("🗑️ إزالة الهدف المحدد من الجدول")
+        self.btn_edit = QPushButton("✏️ تعديل الهدف المحدد")
+        self.btn_edit.setStyleSheet("background-color: #8957e5; color: white; border: 1px solid #a371f7;")
+        self.btn_edit.clicked.connect(self.edit_target)
+
+        self.btn_delete = QPushButton("🗑️ إزالة الهدف المحدد")
         self.btn_delete.clicked.connect(self.delete_target)
 
-        self.btn_wipe = QPushButton("☢️ تصفير ومسح كامل مصفوفة الأهداف")
+        self.btn_wipe = QPushButton("☢️ تصفير ومسح الكل")
         self.btn_wipe.setObjectName("btn_wipe")
         self.btn_wipe.clicked.connect(self.wipe_all)
 
         layout_buttons.addWidget(self.btn_start, 3)
+        layout_buttons.addWidget(self.btn_edit, 1)
         layout_buttons.addWidget(self.btn_delete, 1)
         layout_buttons.addWidget(self.btn_wipe, 1)
         layout_dash.addLayout(layout_buttons)
@@ -620,7 +640,8 @@ class MainWindow(QMainWindow):
         layout_radar.addWidget(self.log_console)
 
         self.log("INFO",
-                 "تم تشغيل واجهة Imperial Ghost Commander بنجاح. تتبع ردود السيرفر وصفحات الـ QR مفعّل بالكامل.")
+                 "تم تشغيل واجهة Imperial Ghost Commander بنجاح. تتبع ردود السيرفر وصفحات الـ QR مفعّل بالكامل. التخزين: JSON")
+
 
     def _create_stat_card(self, title, val, color_hex):
         frame = QFrame()
@@ -669,6 +690,7 @@ class MainWindow(QMainWindow):
         if file_path:
             self.inp_img.setText(file_path)
 
+
     def log(self, level, msg):
         colors = {"INFO": "#58a6ff", "WARNING": "#ffea7f", "SUCCESS": "#56d364", "ERROR": "#f85149",
                   "CRITICAL": "#ff7b72"}
@@ -681,7 +703,8 @@ class MainWindow(QMainWindow):
         imperial_logger.log(getattr(logging, level, logging.INFO),
                             msg.replace("<br>", "\n").replace("</span>", "").replace("<span", ""))
 
-    def add_target(self):
+    def add_or_update_target(self):
+        """إضافة هدف جديد أو حفظ التعديلات"""
         name = self.inp_name.text().strip()
         phone = self.inp_phone.text().strip()
         img = self.inp_img.text().strip()
@@ -696,15 +719,85 @@ class MainWindow(QMainWindow):
         tactic = self.inp_tactic.currentText()
         sabotage_enabled = self.chk_sabotage.isChecked()
 
-        tid = self.db.add(name, phone, day, img, tactic, sabotage_enabled, proxy_per_tx)
-        self.load_data()
+        if self.editing_tid is not None:
+            # وضع التعديل - تحديث المعاملة الموجودة
+            self.db.update_transaction(self.editing_tid, name, phone, day, img, tactic, sabotage_enabled, proxy_per_tx)
+            self.log("SUCCESS", f"تم تعديل بيانات المعاملة [{self.editing_tid}] بنجاح: {name}")
+            self.cancel_edit()
+        else:
+            # وضع الإضافة - معاملة جديدة
+            tid = self.db.add(name, phone, day, img, tactic, sabotage_enabled, proxy_per_tx)
+            self.log("SUCCESS", f"تم حقن الهدف العملياتي بنجاح: {name} | المعرف الدولي للعملية: {tid}")
 
+        self.load_data()
+        self._clear_inputs()
+
+
+    def _clear_inputs(self):
+        """مسح حقول الإدخال"""
         self.inp_name.clear()
         self.inp_phone.clear()
         self.inp_img.clear()
         self.inp_proxy_per_tx.clear()
         self.chk_sabotage.setChecked(False)
-        self.log("SUCCESS", f"تم حقن الهدف العملياتي بنجاح: {name} | المعرف الدولي للعملية: {tid}")
+        self.inp_day.setCurrentIndex(0)
+        self.inp_tactic.setCurrentIndex(0)
+
+    def edit_target(self):
+        """تحميل بيانات المعاملة المحددة في حقول الإدخال للتعديل"""
+        selected_row = self.table.currentRow()
+        if selected_row < 0:
+            QMessageBox.information(self, "تنبيه الاختيار", "يرجى تحديد السطر المراد تعديله من جدول العمليات أولاً.")
+            return
+
+        tid = int(self.table.item(selected_row, 0).text())
+        # البحث عن المعاملة في البيانات
+        all_rows = self.db.get_all()
+        target_data = None
+        for row in all_rows:
+            if row[0] == tid:
+                target_data = row
+                break
+
+        if target_data is None:
+            QMessageBox.warning(self, "خطأ", "لم يتم العثور على المعاملة في قاعدة البيانات.")
+            return
+
+        # تعبئة الحقول ببيانات المعاملة
+        self.editing_tid = tid
+        self.inp_name.setText(target_data[1])
+        self.inp_phone.setText(target_data[2])
+
+        # تحديد اليوم
+        day_index = self.inp_day.findText(target_data[3])
+        if day_index >= 0:
+            self.inp_day.setCurrentIndex(day_index)
+
+        # تحديد التكتيك
+        tactic_index = self.inp_tactic.findText(target_data[5])
+        if tactic_index >= 0:
+            self.inp_tactic.setCurrentIndex(tactic_index)
+
+        self.inp_img.setText(target_data[4])
+        self.chk_sabotage.setChecked(bool(target_data[6]))
+        self.inp_proxy_per_tx.setText(target_data[7] if target_data[7] else "")
+
+        # تغيير مظهر الواجهة لوضع التعديل
+        self.group_input.setTitle(f" ✏️ تعديل المعاملة رقم [{tid}]")
+        self.btn_add_save.setText("💾 حفظ التعديلات")
+        self.btn_add_save.setStyleSheet("background-color: #8957e5; color: white; font-size: 14px; padding: 12px;")
+        self.btn_cancel_edit.setVisible(True)
+        self.log("INFO", f"جاري تعديل المعاملة رقم [{tid}] - {target_data[1]}")
+
+
+    def cancel_edit(self):
+        """إلغاء وضع التعديل والعودة لوضع الإضافة"""
+        self.editing_tid = None
+        self._clear_inputs()
+        self.group_input.setTitle(" ➕ إضافة / تعديل هدف عملياتي")
+        self.btn_add_save.setText("⚙️ حقن وضخ الهدف في مصفوفة الانتظار")
+        self.btn_add_save.setStyleSheet("background-color: #1f6feb; color: white; font-size: 14px; padding: 12px;")
+        self.btn_cancel_edit.setVisible(False)
 
     def load_data(self):
         self.table.setRowCount(0)
@@ -749,6 +842,7 @@ class MainWindow(QMainWindow):
         self.progress.setMaximum(max(1, self.table.rowCount()))
         self._update_stats_display()
 
+
     def open_saved_response_page(self, item):
         row_idx = item.row()
         tid = self.table.item(row_idx, 0).text()
@@ -787,6 +881,7 @@ class MainWindow(QMainWindow):
             self.table.setRowCount(0)
             self.log("WARNING", "تم تفريغ وإبادة مستودع الأهداف بالكامل وإعادة بناء الهياكل الصفرية.")
             self._update_stats_display()
+
 
     def start_attack(self):
         if self.table.rowCount() == 0:
@@ -831,6 +926,7 @@ class MainWindow(QMainWindow):
         if self.sequential_mode and self.delay_between_transactions > 0:
             self.log("INFO", f"الوضع المتتابع: تأخير {self.delay_between_transactions} ثانية بين كل معاملة.")
         self._dispatch()
+
 
     def _dispatch(self):
         while len(self.active) < self.max_threads and self.pending:
@@ -880,7 +976,7 @@ class MainWindow(QMainWindow):
                 self._dispatch()
         elif not self.active:
             self.btn_start.setEnabled(True)
-            self.max_threads = 5  # إعادة القيمة الافتراضية
+            self.max_threads = 5
             self.log("SUCCESS", "انتهت كافة العمليات والتدفقات المجدولة بداخل لوحة التحكم بالكامل.")
             QMessageBox.information(self, "اكتمال المهام",
                                     "تم الانتهاء من حجز كافة الأهداف وسحب صفحات الردود الرسمية بنجاح.")
