@@ -392,7 +392,8 @@ class BookingWorker(QThread):
                 else:
                     final_page_url = loc if loc.startswith("http") else f"{self.base}{loc}"
 
-                self.log_signal.emit("INFO", f"[{self.tid}] تم الحجز بنجاح. جاري سحب رد السيرفر من: {final_page_url}")
+                self.log_signal.emit("SUCCESS", f"[{self.tid}] ✅ تم الحجز بنجاح! رابط الحجز: <a href='{final_page_url}' style='color:#56d364;'>{final_page_url}</a>")
+                self.log_signal.emit("INFO", f"[{self.tid}] جاري سحب رد السيرفر من: {final_page_url}")
 
 
                 try:
@@ -605,10 +606,10 @@ class MainWindow(QMainWindow):
         layout_dash.addWidget(group_settings)
 
 
-        self.table = QTableWidget(0, 10)
+        self.table = QTableWidget(0, 11)
         self.table.setHorizontalHeaderLabels(
             ["ID", "الاسم", "الهاتف", "اليوم الجدولي", "مسار المرفق", "التكتيك", "التدمير الشامل",
-             "البروكسي الخاص", "حالة العملية اللحظية", "رقم مرجع الخادم"])
+             "البروكسي الخاص", "حالة العملية اللحظية", "رقم مرجع الخادم", "رابط الحجز"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setAlternatingRowColors(True)
@@ -862,8 +863,36 @@ class MainWindow(QMainWindow):
 
                 self.table.setItem(r, col_idx, item)
 
+            # عمود رابط الحجز (العمود 10) - يظهر زر نسخ الرابط إذا كان هناك reference_id صالح
+            ref_id = str(row[9]).strip()
+            phone = str(row[2]).strip()
+            status_text = str(row[8])
+
+            if ref_id and ref_id not in ("", "فشل", "مرفوض", "Success") and ref_id.isdigit() and ("نجاح" in status_text or "✅" in status_text):
+                booking_url = f"https://dash.sultraffic.com/success?c={ref_id}&ph={phone}"
+                btn_copy = QPushButton(f"📋 نسخ الرابط (c={ref_id})")
+                btn_copy.setStyleSheet(
+                    "background-color: #238636; color: white; border: 1px solid #2ea043; "
+                    "border-radius: 4px; padding: 4px 8px; font-size: 11px; font-weight: bold;"
+                )
+                btn_copy.setToolTip(booking_url)
+                btn_copy.clicked.connect(lambda checked, url=booking_url: self._copy_booking_url(url))
+                self.table.setCellWidget(r, 10, btn_copy)
+            else:
+                item_link = QTableWidgetItem("—")
+                item_link.setFlags(item_link.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                item_link.setForeground(QColor("#8b949e"))
+                self.table.setItem(r, 10, item_link)
+
         self.progress.setMaximum(max(1, self.table.rowCount()))
         self._update_stats_display()
+
+    def _copy_booking_url(self, url):
+        """نسخ رابط الحجز إلى الحافظة وإظهار إشعار"""
+        clipboard = QApplication.clipboard()
+        clipboard.setText(url)
+        self.log("SUCCESS", f"📋 تم نسخ رابط الحجز إلى الحافظة: {url}")
+        QMessageBox.information(self, "تم النسخ", f"تم نسخ الرابط إلى الحافظة:\n{url}")
 
 
     def open_saved_response_page(self, item):
