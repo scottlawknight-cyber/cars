@@ -595,13 +595,19 @@ class MainWindow(QMainWindow):
         self.inp_delay.setPlaceholderText("0")
         self.inp_delay.setText("0")
 
+        self.inp_repeat_count = QLineEdit()
+        self.inp_repeat_count.setPlaceholderText("1")
+        self.inp_repeat_count.setText("1")
+
         self.chk_sequential = QCheckBox("تفعيل الإرسال المتتابع (معاملة تلو الأخرى مع تأخير)")
 
         grid_settings.addWidget(QLabel("البروكسي العام (سكني):"), 0, 0)
         grid_settings.addWidget(self.inp_global_proxy, 0, 1, 1, 3)
         grid_settings.addWidget(QLabel("التأخير بين المعاملات (ثوانٍ):"), 1, 0)
         grid_settings.addWidget(self.inp_delay, 1, 1)
-        grid_settings.addWidget(self.chk_sequential, 1, 2, 1, 2)
+        grid_settings.addWidget(QLabel("عدد مرات الإرسال لكل معاملة:"), 1, 2)
+        grid_settings.addWidget(self.inp_repeat_count, 1, 3)
+        grid_settings.addWidget(self.chk_sequential, 2, 0, 1, 4)
 
         layout_dash.addWidget(group_settings)
 
@@ -624,11 +630,11 @@ class MainWindow(QMainWindow):
         layout_dash.addWidget(lbl_hint)
 
         layout_buttons = QHBoxLayout()
-        self.btn_start = QPushButton("🚀 بدء الهجوم المكثف المتزامن")
+        self.btn_start = QPushButton("🚀 إرسال الكل (عدا الناجح)")
         self.btn_start.setObjectName("btn_start")
         self.btn_start.clicked.connect(self.start_attack)
 
-        self.btn_start_all = QPushButton("🔄 إرسال الكل مرة واحدة")
+        self.btn_start_all = QPushButton("🔄 إرسال الكل (حتى الناجح)")
         self.btn_start_all.setStyleSheet("background-color: #1f6feb; color: white; border: 1px solid #388bfd; font-size: 13px;")
         self.btn_start_all.clicked.connect(self.start_attack_all)
 
@@ -935,7 +941,16 @@ class MainWindow(QMainWindow):
             self._update_stats_display()
 
 
+    def _get_repeat_count(self):
+        """الحصول على عدد مرات تكرار الإرسال لكل معاملة"""
+        try:
+            count = int(self.inp_repeat_count.text().strip())
+            return max(1, count)
+        except ValueError:
+            return 1
+
     def start_attack(self):
+        """إرسال جميع المعاملات عدا الناجحة - مع دعم التكرار"""
         if self.table.rowCount() == 0:
             QMessageBox.warning(self, "مصفوفة فارغة", "لا توجد أهداف متاحة للبدء بالهجوم المجدول.")
             return
@@ -945,6 +960,9 @@ class MainWindow(QMainWindow):
             self.delay_between_transactions = float(self.inp_delay.text().strip())
         except ValueError:
             self.delay_between_transactions = 0
+
+        # عدد مرات التكرار
+        repeat_count = self._get_repeat_count()
 
         # التحقق من وضع الإرسال المتتابع
         self.sequential_mode = self.chk_sequential.isChecked()
@@ -960,9 +978,10 @@ class MainWindow(QMainWindow):
 
         for r in range(self.table.rowCount()):
             status_item = self.table.item(r, 8)
-            if status_item and "نجاح" not in status_item.text():
+            if status_item and "نجاح" not in status_item.text() and "✅" not in status_item.text():
                 if r < len(db_rows):
-                    self.pending.append((r, db_rows[r]))
+                    for _ in range(repeat_count):
+                        self.pending.append((r, db_rows[r]))
 
         if not self.pending:
             QMessageBox.information(self, "اكتملت التدفقات", "كافة الأهداف الحالية مسجلة مسبقاً كعمليات ناجحة بالكامل.")
@@ -975,13 +994,15 @@ class MainWindow(QMainWindow):
         self.progress.setValue(0)
         self.active = []
 
-        self.log("INFO", f"تم إطلاق صافرة بدء العمليات الحركية المكثفة على {len(self.pending)} هدف مجدول.")
+        total_requests = len(self.pending)
+        unique_targets = total_requests // repeat_count if repeat_count > 0 else total_requests
+        self.log("INFO", f"تم إطلاق صافرة بدء العمليات على {unique_targets} هدف × {repeat_count} مرة = {total_requests} طلب إجمالي.")
         if self.sequential_mode and self.delay_between_transactions > 0:
             self.log("INFO", f"الوضع المتتابع: تأخير {self.delay_between_transactions} ثانية بين كل معاملة.")
         self._dispatch()
 
     def start_attack_all(self):
-        """إرسال جميع المعاملات مرة واحدة بغض النظر عن حالتها (حتى الناجحة سابقاً)"""
+        """إرسال جميع المعاملات بما فيها الناجحة سابقاً - مع دعم التكرار"""
         if self.table.rowCount() == 0:
             QMessageBox.warning(self, "مصفوفة فارغة", "لا توجد أهداف متاحة للبدء.")
             return
@@ -991,6 +1012,9 @@ class MainWindow(QMainWindow):
             self.delay_between_transactions = float(self.inp_delay.text().strip())
         except ValueError:
             self.delay_between_transactions = 0
+
+        # عدد مرات التكرار
+        repeat_count = self._get_repeat_count()
 
         self.sequential_mode = self.chk_sequential.isChecked()
 
@@ -1011,7 +1035,8 @@ class MainWindow(QMainWindow):
 
         for r in range(self.table.rowCount()):
             if r < len(db_rows):
-                self.pending.append((r, db_rows[r]))
+                for _ in range(repeat_count):
+                    self.pending.append((r, db_rows[r]))
 
         self.btn_start.setEnabled(False)
         self.btn_start_all.setEnabled(False)
@@ -1020,7 +1045,9 @@ class MainWindow(QMainWindow):
         self.progress.setValue(0)
         self.active = []
 
-        self.log("INFO", f"🔄 إرسال الكل مرة واحدة: {len(self.pending)} هدف (شامل الناجحة سابقاً).")
+        total_requests = len(self.pending)
+        unique_targets = len(db_rows)
+        self.log("INFO", f"🔄 إرسال الكل (حتى الناجح): {unique_targets} هدف × {repeat_count} مرة = {total_requests} طلب إجمالي.")
         if self.sequential_mode and self.delay_between_transactions > 0:
             self.log("INFO", f"الوضع المتتابع: تأخير {self.delay_between_transactions} ثانية بين كل معاملة.")
         self._dispatch()
